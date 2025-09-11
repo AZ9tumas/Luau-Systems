@@ -1,5 +1,3 @@
--- ReplicatedStorage/Modules/CameraShakeModule.lua
-
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -13,6 +11,37 @@ local ActiveShakes = {}
 local IsUpdateLoopRunning = false
 local PreviousShakeCFrame = CFrame.new()
 
+local springPosition = Vector3.new()
+local springVelocity = Vector3.new()
+local springIsActive = false
+
+local function update_camera_spring(dt)
+	local stiffness = 300
+	local damping = 15
+
+	if springPosition.Magnitude < 0.001 and springVelocity.Magnitude < 0.001 then
+		springIsActive = false
+		Camera.CFrame = Camera.CFrame * CFrame.Angles(springPosition.X, springPosition.Y, springPosition.Z):Inverse()
+		springPosition = Vector3.new()
+		RunService:UnbindFromRenderStep("CameraSpringRecoil")
+		return
+	end
+	
+	-- update position first
+	Camera.CFrame = Camera.CFrame * CFrame.Angles(springPosition.X, springPosition.Y, springPosition.Z):Inverse()
+	
+	local springForce = -stiffness * springPosition
+	local dampingForce = -damping * springVelocity
+	local totalForce = springForce + dampingForce
+	
+	-- assume mass = 1, so add acceleration to the velocity per frame render
+	springVelocity = springVelocity + totalForce * dt
+	springPosition = springPosition + springVelocity * dt
+	
+	-- finally update camera with the new position
+	Camera.CFrame = Camera.CFrame * CFrame.Angles(springPosition.X, springPosition.Y, springPosition.Z)
+end
+
 local function update_camera_shake(deltaTime)
 	local totalRotationalOffset = CFrame.new()
 	local totalPositionalOffset = CFrame.new()
@@ -20,8 +49,6 @@ local function update_camera_shake(deltaTime)
 	for id, shakeData in pairs(ActiveShakes) do
 		local decayRate = shakeData.DecayRate
 		local timeRemaining = shakeData.TimeLeft
-
-		-- The alpha for lerping should be based on a consistent rate, adjusted for the frame time.
 		local decayAlpha = math.clamp(1 - (1 - decayRate) ^ (deltaTime * 60), 0, 1)
 		shakeData.CurrentMagnitude = shakeData.CurrentMagnitude:Lerp(Vector3.new(), decayAlpha)
 		shakeData.TimeLeft = timeRemaining - deltaTime
@@ -42,12 +69,9 @@ local function update_camera_shake(deltaTime)
 	end
 
 	local currentShakeCFrame = totalPositionalOffset * totalRotationalOffset
-
-	-- The core logic: remove the last frame's shake and apply the new one.
 	Camera.CFrame = Camera.CFrame * PreviousShakeCFrame:Inverse() * currentShakeCFrame
 	PreviousShakeCFrame = currentShakeCFrame
-
-	-- If no shakes remain, stop the update loop.
+	
 	if not next(ActiveShakes) then
 		IsUpdateLoopRunning = false
 		RunService:UnbindFromRenderStep("CameraShake")
@@ -64,12 +88,25 @@ local function add_shake_effect(magnitude, duration, decay_rate, shake_type)
 		TimeLeft = duration,
 	}
 	table.insert(ActiveShakes, newShake)
-
-	-- If the update loop isn't running, start it and reset the state.
+	
 	if not IsUpdateLoopRunning then
 		IsUpdateLoopRunning = true
 		PreviousShakeCFrame = CFrame.new()
 		RunService:BindToRenderStep("CameraShake", Enum.RenderPriority.Camera.Value + 5, update_camera_shake)
+	end
+end
+
+function CameraShakeModule.spring_recoil(kick_impulse: Vector3)
+	local impulseInRadians = Vector3.new(
+		math.rad(kick_impulse.X),
+		math.rad(kick_impulse.Y),
+		math.rad(kick_impulse.Z)
+	)
+	springVelocity = springVelocity + impulseInRadians
+	
+	if not springIsActive then
+		springIsActive = true
+		RunService:BindToRenderStep("CameraSpringRecoil", Enum.RenderPriority.Camera.Value + 10, update_camera_spring)
 	end
 end
 
